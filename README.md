@@ -1,6 +1,10 @@
 # ModelScopeT2V-2023-docker
 
-Docker install of old ModelScopeT2V.
+Docker install of old ModelScopeT2V: https://huggingface.co/ali-vilab/modelscope-damo-text-to-video-synthesis
+
+You need ~16GB VRAM to run.
+
+Commercial use not allowed by model creators.
 
 ## Run
 
