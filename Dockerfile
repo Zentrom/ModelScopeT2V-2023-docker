@@ -6,7 +6,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     HF_HOME=/cache/huggingface \
     MODELSCOPE_CACHE=/cache/modelscope \
-    TORCH_HOME=/cache/torch
+    TORCH_HOME=/cache/torch \
+    TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
 
 WORKDIR /workspace
 
@@ -18,9 +19,12 @@ RUN apt-get update \
         libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN python -m pip install --upgrade pip setuptools wheel \
+RUN python -m pip install --upgrade pip wheel \
+    && python -m pip install setuptools==69.5.1 \
     && python -m pip install modelscope==1.4.2 \
-    && python -m pip install open_clip_torch \
+    && python -m pip install pyarrow==20.0.0 \
+    && python -m pip install opencv-python-headless \
+    && python -m pip install open_clip_torch==2.24.0 \
     && python -m pip install pytorch-lightning \
     && python -m pip install huggingface_hub \
     && python -m pip install fastapi==0.95.2 "uvicorn[standard]==0.22.0"
