@@ -5,8 +5,11 @@ services:
       dockerfile: Dockerfile
     image: modelscope-t2v-2023:latest
     working_dir: /workspace
+    ports:
+      - "127.0.0.1:8080:8080"
     volumes:
       - .:/workspace
+      - ./outputs:/workspace/outputs
       - model-cache:/cache
     environment:
       HF_HOME: /cache/huggingface
@@ -24,7 +27,7 @@ services:
                 - gpu
     tty: true
     stdin_open: true
-    command: sleep infinity
+    command: uvicorn api:app --host 0.0.0.0 --port 8080
 
 volumes:
   model-cache:

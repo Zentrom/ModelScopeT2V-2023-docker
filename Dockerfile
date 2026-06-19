@@ -22,8 +22,9 @@ RUN python -m pip install --upgrade pip setuptools wheel \
     && python -m pip install modelscope==1.4.2 \
     && python -m pip install open_clip_torch \
     && python -m pip install pytorch-lightning \
-    && python -m pip install huggingface_hub
+    && python -m pip install huggingface_hub \
+    && python -m pip install fastapi==0.95.2 "uvicorn[standard]==0.22.0"
 
 COPY . /workspace
 
-CMD ["python"]
+CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8080"]

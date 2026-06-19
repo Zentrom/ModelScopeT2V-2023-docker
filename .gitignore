@@ -219,3 +219,6 @@ __marimo__/
 
 # Downloaded model weights
 weights/
+
+# Generated videos
+outputs/
