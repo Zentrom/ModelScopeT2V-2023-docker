@@ -1,0 +1,30 @@
+services:
+  modelscope-t2v:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: modelscope-t2v-2023:latest
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - model-cache:/cache
+    environment:
+      HF_HOME: /cache/huggingface
+      MODELSCOPE_CACHE: /cache/modelscope
+      TORCH_HOME: /cache/torch
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities:
+                - gpu
+    tty: true
+    stdin_open: true
+    command: sleep infinity
+
+volumes:
+  model-cache:
