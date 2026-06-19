@@ -1,5 +1,6 @@
 import pathlib
 import shutil
+import subprocess
 import uuid
 from datetime import datetime, timezone
 
@@ -12,6 +13,50 @@ MODEL_REPO = "damo-vilab/modelscope-damo-text-to-video-synthesis"
 MODEL_DIR = pathlib.Path("weights")
 OUTPUT_DIR = pathlib.Path("outputs")
 DEFAULT_PROMPT = "A robot walking through a futuristic city at night, cinematic lighting"
+
+
+def convert_video(input_path, output_path):
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        input_path.as_posix(),
+        "-f",
+        "lavfi",
+        "-i",
+        "anullsrc=channel_layout=stereo:sample_rate=44100",
+        "-vf",
+        "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+        "-c:v",
+        "libx264",
+        "-crf",
+        "16",
+        "-preset",
+        "slow",
+        "-pix_fmt",
+        "yuv420p",
+        "-profile:v",
+        "main",
+        "-movflags",
+        "+faststart",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-shortest",
+        output_path.as_posix(),
+    ]
+
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg conversion failed: {result.stderr}")
+
+
+def delete_file(path):
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def load_text_to_video_pipeline():
@@ -39,10 +84,19 @@ def generate_video(pipe, text, output_dir=OUTPUT_DIR):
     output_dir.mkdir(parents=True, exist_ok=True)
     extension = generated_path.suffix or ".mp4"
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    output_path = output_dir / f"{timestamp}-{uuid.uuid4().hex[:8]}{extension}"
+    output_id = uuid.uuid4().hex[:8]
+    raw_output_path = output_dir / f"{timestamp}-{output_id}.raw{extension}"
+    output_path = output_dir / f"{timestamp}-{output_id}.mp4"
 
-    if generated_path.resolve() != output_path.resolve():
-        shutil.copy2(generated_path, output_path)
+    if generated_path.resolve() != raw_output_path.resolve():
+        shutil.copy2(generated_path, raw_output_path)
+
+    try:
+        convert_video(raw_output_path, output_path)
+    finally:
+        delete_file(raw_output_path)
+        if generated_path.resolve() != raw_output_path.resolve():
+            delete_file(generated_path)
 
     return output_path
 
