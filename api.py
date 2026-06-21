@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from load_pipeline import (
     OUTPUT_DIR,
+    UPSCALED_OUTPUT_SUBDIR,
     clear_upscaled_outputs,
     create_upscaled_video,
     ensure_interpolated_output_dir,
@@ -145,6 +146,18 @@ def _find_output_file(filename):
     output_path = OUTPUT_DIR / clean_filename
     if not output_path.is_file():
         raise HTTPException(status_code=404, detail="File not found in outputs.")
+
+    return output_path
+
+
+def _find_upscaled_file(filename):
+    clean_filename = Path(filename).name
+    if not clean_filename:
+        raise HTTPException(status_code=400, detail="Filename cannot be empty.")
+
+    output_path = OUTPUT_DIR / UPSCALED_OUTPUT_SUBDIR / clean_filename
+    if not output_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found in outputs/upscaled.")
 
     return output_path
 
@@ -456,11 +469,7 @@ def _interpolate_video(video_path, interpolated_dir):
     return uploaded_video, prompt_id, output_video, interpolated_video_path
 
 
-def _enhance_frame(frame_path, upscaled_dir, steps=None):
-    uploaded_image, prompt_id, configured_steps = _submit_image_upgrade_to_comfyui(
-        frame_path,
-        steps=steps,
-    )
+def _download_enhanced_frame(frame_path, upscaled_dir, uploaded_image, prompt_id):
     history = _wait_for_comfyui_prompt(prompt_id)
     output_image = _find_comfyui_output_image(history)
     upscaled_image_path = upscaled_dir / frame_path.name
@@ -472,7 +481,7 @@ def _enhance_frame(frame_path, upscaled_dir, steps=None):
             detail=f"ComfyUI output was not saved for frame {frame_path.name}.",
         )
 
-    return configured_steps, EnchanceFrameResponse(
+    return EnchanceFrameResponse(
         frame=frame_path.name,
         frame_path=frame_path.resolve().as_posix(),
         host_frame_path=(Path("outputs") / "frames" / frame_path.name).as_posix(),
@@ -486,6 +495,53 @@ def _enhance_frame(frame_path, upscaled_dir, steps=None):
             Path("outputs") / "upscaled" / upscaled_image_path.name
         ).as_posix(),
     )
+
+
+def _submit_image_upgrade_frames_to_comfyui(frame_paths, steps=None):
+    configured_steps = None
+    submitted_frames = []
+
+    for frame_path in frame_paths:
+        uploaded_image, prompt_id, frame_steps = _submit_image_upgrade_to_comfyui(
+            frame_path,
+            steps=steps,
+        )
+        configured_steps = frame_steps
+        submitted_frames.append((frame_path, uploaded_image, prompt_id))
+
+    return configured_steps, submitted_frames
+
+
+def _delete_comfyui_queue_items(prompt_ids):
+    if not prompt_ids:
+        return
+
+    try:
+        _comfyui_request("/queue", data={"delete": list(prompt_ids)})
+    except HTTPException:
+        pass
+
+
+def _download_submitted_image_upgrade_frames(submitted_frames, upscaled_dir):
+    upscaled_frames = []
+    remaining_prompt_ids = [prompt_id for _, _, prompt_id in submitted_frames]
+
+    for frame_path, uploaded_image, prompt_id in submitted_frames:
+        try:
+            frame_result = _download_enhanced_frame(
+                frame_path,
+                upscaled_dir,
+                uploaded_image,
+                prompt_id,
+            )
+        except HTTPException:
+            _delete_comfyui_queue_items(remaining_prompt_ids)
+            raise
+
+        upscaled_frames.append(frame_result)
+        remaining_prompt_ids.remove(prompt_id)
+
+    return upscaled_frames
 
 
 def _release_pipeline(pipe):
@@ -525,6 +581,25 @@ def _unload_inactive_pipeline(model_name):
         unloaded = True
 
     if model_name != MS_17B_MODEL and _ms_17b_pipe is not None:
+        _release_pipeline(_ms_17b_pipe)
+        _ms_17b_pipe = None
+        unloaded = True
+
+    if unloaded:
+        _active_model = None
+        _clear_memory()
+
+
+def _unload_generation_pipelines():
+    global _active_model, _demo_pipe, _ms_17b_pipe
+
+    unloaded = False
+    if _demo_pipe is not None:
+        _release_pipeline(_demo_pipe)
+        _demo_pipe = None
+        unloaded = True
+
+    if _ms_17b_pipe is not None:
         _release_pipeline(_ms_17b_pipe)
         _ms_17b_pipe = None
         unloaded = True
@@ -591,6 +666,8 @@ def generate(request: GenerateRequest):
 @app.post("/enchance", response_model=EnchanceResponse)
 def enchance(request: EnchanceRequest):
     video_path = _find_output_file(request.filename.strip())
+    _unload_generation_pipelines()
+
     upscaled_dir = clear_upscaled_outputs(output_dir=OUTPUT_DIR)
     interpolated_dir = ensure_interpolated_output_dir(output_dir=OUTPUT_DIR)
 
@@ -603,15 +680,14 @@ def enchance(request: EnchanceRequest):
     if not frame_paths:
         raise HTTPException(status_code=500, detail="No frames were extracted.")
 
-    configured_steps = None
-    upscaled_frames = []
-    for frame_path in frame_paths:
-        configured_steps, frame_result = _enhance_frame(
-            frame_path,
-            upscaled_dir,
-            steps=request.steps,
-        )
-        upscaled_frames.append(frame_result)
+    configured_steps, submitted_frames = _submit_image_upgrade_frames_to_comfyui(
+        frame_paths,
+        steps=request.steps,
+    )
+    upscaled_frames = _download_submitted_image_upgrade_frames(
+        submitted_frames,
+        upscaled_dir,
+    )
 
     try:
         upscaled_video_path = create_upscaled_video(upscaled_dir)
@@ -663,7 +739,7 @@ def enchance(request: EnchanceRequest):
 
 @app.post("/interpolate", response_model=InterpolateResponse)
 def interpolate(request: InterpolateRequest):
-    video_path = _find_output_file(request.filename.strip())
+    video_path = _find_upscaled_file(request.filename.strip())
     if video_path.suffix.lower() != ".mp4":
         raise HTTPException(status_code=400, detail="Filename must point to an .mp4 file.")
 
@@ -678,7 +754,9 @@ def interpolate(request: InterpolateRequest):
     return InterpolateResponse(
         filename=video_path.name,
         video_path=video_path.resolve().as_posix(),
-        host_video_path=(Path("outputs") / video_path.name).as_posix(),
+        host_video_path=(
+            Path("outputs") / UPSCALED_OUTPUT_SUBDIR / video_path.name
+        ).as_posix(),
         interpolated_video_path=interpolated_video_path.resolve().as_posix(),
         host_interpolated_video_path=(
             Path("outputs") / "interpolated" / interpolated_video_path.name

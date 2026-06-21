@@ -18,7 +18,7 @@
         "3",
         0
       ],
-      "multiplier": 4
+      "multiplier": 8
     },
     "class_type": "FrameInterpolate",
     "_meta": {
@@ -105,7 +105,7 @@
         "3",
         2
       ],
-      "values.b": 6,
+      "values.b": 8,
       "expression": "min(abs(b), 16) * a"
     },
     "class_type": "ComfyMathExpression",
