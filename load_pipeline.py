@@ -58,6 +58,9 @@ def convert_video(input_path, output_path):
 def extract_video_frames(input_path, output_dir=OUTPUT_DIR):
     frames_dir = pathlib.Path(output_dir) / FRAMES_OUTPUT_SUBDIR
     frames_dir.mkdir(parents=True, exist_ok=True)
+    for frame_path in frames_dir.glob("*.png"):
+        delete_file(frame_path)
+
     frame_pattern = frames_dir / "%05d.png"
 
     command = [

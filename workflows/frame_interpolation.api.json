@@ -1,0 +1,116 @@
+{
+  "1": {
+    "inputs": {
+      "model_name": "film_net_fp16.safetensors"
+    },
+    "class_type": "FrameInterpolationModelLoader",
+    "_meta": {
+      "title": "Frame Interpolation Model"
+    }
+  },
+  "2": {
+    "inputs": {
+      "interp_model": [
+        "1",
+        0
+      ],
+      "images": [
+        "3",
+        0
+      ],
+      "multiplier": 6
+    },
+    "class_type": "FrameInterpolate",
+    "_meta": {
+      "title": "Frame Interpolate"
+    }
+  },
+  "3": {
+    "inputs": {
+      "video": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "GetVideoComponents",
+    "_meta": {
+      "title": "Get Video Components"
+    }
+  },
+  "4": {
+    "inputs": {
+      "file": "new.mp4"
+    },
+    "class_type": "LoadVideo",
+    "_meta": {
+      "title": "Load Video"
+    }
+  },
+  "5": {
+    "inputs": {
+      "images": [
+        "2",
+        0
+      ],
+      "audio": [
+        "3",
+        1
+      ],
+      "fps": [
+        "10",
+        0
+      ],
+      "bit_depth": 8
+    },
+    "class_type": "CreateVideo",
+    "_meta": {
+      "title": "Create Video"
+    }
+  },
+  "7": {
+    "inputs": {
+      "video": [
+        "5",
+        0
+      ],
+      "filename_prefix": "video/ComfyUI",
+      "format": "auto",
+      "codec": "auto"
+    },
+    "class_type": "SaveVideo",
+    "_meta": {
+      "title": "Save Video"
+    }
+  },
+  "10": {
+    "inputs": {
+      "on_false": [
+        "3",
+        2
+      ],
+      "on_true": [
+        "11",
+        0
+      ],
+      "switch": true
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "Use Multiplied FPS"
+    }
+  },
+  "11": {
+    "inputs": {
+      "values.a": [
+        "3",
+        2
+      ],
+      "values.b": 6,
+      "expression": "min(abs(b), 16) * a"
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "Calculate Output FPS"
+    }
+  }
+}
