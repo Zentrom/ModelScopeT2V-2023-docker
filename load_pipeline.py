@@ -5,8 +5,6 @@ import uuid
 from datetime import datetime, timezone
 
 from huggingface_hub import snapshot_download
-from modelscope.outputs import OutputKeys
-from modelscope.pipelines import pipeline
 
 
 MODEL_REPO = "damo-vilab/modelscope-damo-text-to-video-synthesis"
@@ -82,6 +80,8 @@ def build_output_paths(output_dir, extension=".mp4", filename_prefix=""):
 
 
 def load_text_to_video_pipeline():
+    from modelscope.pipelines import pipeline
+
     # Download model weights locally so ModelScope can load them from disk.
     snapshot_download(
         MODEL_REPO,
@@ -129,6 +129,8 @@ def load_ms_17b_text_to_video_pipeline():
 
 
 def generate_video(pipe, text, output_dir=OUTPUT_DIR):
+    from modelscope.outputs import OutputKeys
+
     prompt = {
         "text": text,
     }
