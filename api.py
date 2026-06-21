@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from load_pipeline import (
     OUTPUT_DIR,
     clear_upscaled_outputs,
+    create_upscaled_video,
     extract_video_frames,
     generate_ms_17b_video,
     generate_video,
@@ -86,6 +87,8 @@ class EnchanceResponse(BaseModel):
     comfyui_url: str
     frame_count: int
     upscaled_frame_count: int
+    upscaled_video_path: str
+    host_upscaled_video_path: str
     upscaled_frames: List[EnchanceFrameResponse]
 
 
@@ -484,6 +487,11 @@ def enchance(request: EnchanceRequest):
         )
         upscaled_frames.append(frame_result)
 
+    try:
+        upscaled_video_path = create_upscaled_video(upscaled_dir)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
     return EnchanceResponse(
         filename=video_path.name,
         steps=configured_steps,
@@ -494,6 +502,10 @@ def enchance(request: EnchanceRequest):
         comfyui_url=COMFYUI_BASE_URL,
         frame_count=len(frame_paths),
         upscaled_frame_count=len(upscaled_frames),
+        upscaled_video_path=upscaled_video_path.resolve().as_posix(),
+        host_upscaled_video_path=(
+            Path("outputs") / "upscaled" / upscaled_video_path.name
+        ).as_posix(),
         upscaled_frames=upscaled_frames,
     )
 

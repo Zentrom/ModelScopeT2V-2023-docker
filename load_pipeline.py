@@ -3,6 +3,7 @@ import re
 import shutil
 import subprocess
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from huggingface_hub import snapshot_download
 
@@ -87,6 +88,43 @@ def clear_upscaled_outputs(output_dir=OUTPUT_DIR):
             delete_file(output_path)
 
     return upscaled_dir
+
+
+def create_upscaled_video(upscaled_dir):
+    upscaled_dir = pathlib.Path(upscaled_dir)
+    frame_pattern = upscaled_dir / "%05d.png"
+    timestamp = datetime.now(timezone.utc).strftime("%m%d-%H%M")
+    output_path = upscaled_dir / f"{timestamp}-{uuid4().hex[:8]}.mp4"
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-framerate",
+        "8",
+        "-i",
+        frame_pattern.as_posix(),
+        "-vf",
+        "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+        "-c:v",
+        "libx264",
+        "-crf",
+        "16",
+        "-preset",
+        "slow",
+        "-pix_fmt",
+        "yuv420p",
+        "-profile:v",
+        "main",
+        "-movflags",
+        "+faststart",
+        output_path.as_posix(),
+    ]
+
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg upscaled video creation failed: {result.stderr}")
+
+    return output_path
 
 
 def delete_file(path):
