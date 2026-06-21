@@ -32,6 +32,6 @@ RUN python -m pip install --upgrade pip wheel \
 
 COPY . /workspace
 
-RUN mkdir -p /workspace/outputs/orig /workspace/outputs/frames /workspace/outputs/upscaled
+RUN mkdir -p /workspace/outputs/orig /workspace/outputs/frames /workspace/outputs/upscaled /workspace/outputs/interpolated
 
 CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8080"]

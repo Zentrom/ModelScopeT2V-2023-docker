@@ -15,6 +15,7 @@ OUTPUT_DIR = pathlib.Path("outputs")
 ORIG_OUTPUT_SUBDIR = "orig"
 FRAMES_OUTPUT_SUBDIR = "frames"
 UPSCALED_OUTPUT_SUBDIR = "upscaled"
+INTERPOLATED_OUTPUT_SUBDIR = "interpolated"
 DEMO_OUTPUT_PREFIX = "demo_"
 DEFAULT_MS_17B_INFERENCE_STEPS = 25
 DEFAULT_PROMPT = "A robot walking through a futuristic city at night, cinematic lighting"
@@ -88,6 +89,12 @@ def clear_upscaled_outputs(output_dir=OUTPUT_DIR):
             delete_file(output_path)
 
     return upscaled_dir
+
+
+def ensure_interpolated_output_dir(output_dir=OUTPUT_DIR):
+    interpolated_dir = pathlib.Path(output_dir) / INTERPOLATED_OUTPUT_SUBDIR
+    interpolated_dir.mkdir(parents=True, exist_ok=True)
+    return interpolated_dir
 
 
 def create_upscaled_video(upscaled_dir):

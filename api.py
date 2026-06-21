@@ -16,6 +16,7 @@ from load_pipeline import (
     OUTPUT_DIR,
     clear_upscaled_outputs,
     create_upscaled_video,
+    ensure_interpolated_output_dir,
     extract_video_frames,
     generate_ms_17b_video,
     generate_video,
@@ -36,6 +37,9 @@ IMAGE_UPGRADE_WORKFLOW_PATH = Path("workflows") / "image_upgrade.api.json"
 IMAGE_UPGRADE_KSAMPLER_NODE_ID = "3"
 IMAGE_UPGRADE_LOAD_IMAGE_NODE_ID = "78"
 IMAGE_UPGRADE_SAVE_IMAGE_NODE_ID = "60"
+FRAME_INTERPOLATION_WORKFLOW_PATH = Path("workflows") / "frame_interpolation.api.json"
+FRAME_INTERPOLATION_LOAD_VIDEO_NODE_ID = "4"
+FRAME_INTERPOLATION_SAVE_VIDEO_NODE_ID = "7"
 
 _demo_pipe = None
 _ms_17b_pipe = None
@@ -89,6 +93,13 @@ class EnchanceResponse(BaseModel):
     upscaled_frame_count: int
     upscaled_video_path: str
     host_upscaled_video_path: str
+    interpolated_video_path: str
+    host_interpolated_video_path: str
+    comfyui_interpolation_uploaded_video: str
+    comfyui_interpolation_prompt_id: str
+    comfyui_interpolation_output_filename: str
+    comfyui_interpolation_output_subfolder: str
+    comfyui_interpolation_output_type: str
     upscaled_frames: List[EnchanceFrameResponse]
 
 
@@ -181,6 +192,18 @@ def _comfyui_get_bytes(path):
         ) from exc
 
 
+def _guess_content_type(path):
+    suffix = path.suffix.lower()
+    if suffix == ".png":
+        return "image/png"
+    if suffix in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if suffix == ".mp4":
+        return "video/mp4"
+
+    return "application/octet-stream"
+
+
 def _encode_multipart_form_data(fields, files):
     boundary = f"----modelscope-t2v-{uuid4().hex}"
     body = bytearray()
@@ -201,7 +224,7 @@ def _encode_multipart_form_data(fields, files):
                 f'filename="{path.name}"\r\n'
             ).encode("utf-8")
         )
-        body.extend(b"Content-Type: image/png\r\n\r\n")
+        body.extend(f"Content-Type: {_guess_content_type(path)}\r\n\r\n".encode("utf-8"))
         body.extend(path.read_bytes())
         body.extend(b"\r\n")
 
@@ -209,23 +232,31 @@ def _encode_multipart_form_data(fields, files):
     return bytes(body), f"multipart/form-data; boundary={boundary}"
 
 
-def _upload_image_to_comfyui(image_path):
+def _upload_file_to_comfyui(file_path):
     body, content_type = _encode_multipart_form_data(
         fields={
             "type": "input",
             "overwrite": "true",
         },
         files={
-            "image": image_path,
+            "image": file_path,
         },
     )
     response = _comfyui_request("/upload/image", data=body, content_type=content_type)
-    image_name = response.get("name") or image_path.name
+    file_name = response.get("name") or file_path.name
     subfolder = response.get("subfolder")
     if subfolder:
-        return f"{subfolder}/{image_name}"
+        return f"{subfolder}/{file_name}"
 
-    return image_name
+    return file_name
+
+
+def _upload_image_to_comfyui(image_path):
+    return _upload_file_to_comfyui(image_path)
+
+
+def _upload_video_to_comfyui(video_path):
+    return _upload_file_to_comfyui(video_path)
 
 
 def _configure_image_upgrade_workflow(workflow, uploaded_image, steps=None):
@@ -273,6 +304,44 @@ def _submit_image_upgrade_to_comfyui(image_path, steps=None):
     return uploaded_image, prompt_id, configured_steps
 
 
+def _configure_frame_interpolation_workflow(workflow, uploaded_video):
+    try:
+        workflow[FRAME_INTERPOLATION_LOAD_VIDEO_NODE_ID]["inputs"]["file"] = uploaded_video
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Frame interpolation workflow is missing the LoadVideo node.",
+        ) from exc
+
+
+def _submit_frame_interpolation_to_comfyui(video_path):
+    if not FRAME_INTERPOLATION_WORKFLOW_PATH.is_file():
+        raise HTTPException(
+            status_code=500,
+            detail="Frame interpolation workflow not found.",
+        )
+
+    uploaded_video = _upload_video_to_comfyui(video_path)
+    workflow = _read_json(FRAME_INTERPOLATION_WORKFLOW_PATH)
+    _configure_frame_interpolation_workflow(workflow, uploaded_video)
+
+    response = _comfyui_request(
+        "/prompt",
+        data={
+            "prompt": workflow,
+            "client_id": uuid4().hex,
+        },
+    )
+    prompt_id = response.get("prompt_id")
+    if not prompt_id:
+        raise HTTPException(
+            status_code=500,
+            detail=f"ComfyUI did not return a prompt_id: {response}",
+        )
+
+    return uploaded_video, prompt_id
+
+
 def _wait_for_comfyui_prompt(prompt_id):
     deadline = monotonic() + COMFYUI_POLL_TIMEOUT_SECONDS
     history_path = f"/history/{parse.quote(prompt_id)}"
@@ -301,34 +370,72 @@ def _wait_for_comfyui_prompt(prompt_id):
     )
 
 
-def _find_comfyui_output_image(history):
+def _find_comfyui_output_media(history, node_id, media_keys):
     outputs = history.get("outputs") or {}
-    save_output = outputs.get(IMAGE_UPGRADE_SAVE_IMAGE_NODE_ID) or {}
-    images = save_output.get("images") or []
-    if images:
-        return images[0]
+    save_output = outputs.get(node_id) or {}
+    for media_key in media_keys:
+        media = save_output.get(media_key) or []
+        if media:
+            return media[0]
 
     for output in outputs.values():
-        images = output.get("images") or []
-        if images:
-            return images[0]
+        for media_key in media_keys:
+            media = output.get(media_key) or []
+            if media:
+                return media[0]
 
     raise HTTPException(
         status_code=500,
-        detail="ComfyUI completed but did not return an output image.",
+        detail="ComfyUI completed but did not return the expected output media.",
     )
+
+
+def _find_comfyui_output_image(history):
+    return _find_comfyui_output_media(
+        history,
+        IMAGE_UPGRADE_SAVE_IMAGE_NODE_ID,
+        ("images",),
+    )
+
+
+def _find_comfyui_output_video(history):
+    return _find_comfyui_output_media(
+        history,
+        FRAME_INTERPOLATION_SAVE_VIDEO_NODE_ID,
+        ("videos", "gifs", "images"),
+    )
+
+
+def _download_comfyui_media(media_info, output_path):
+    params = parse.urlencode(
+        {
+            "filename": media_info.get("filename", ""),
+            "subfolder": media_info.get("subfolder", ""),
+            "type": media_info.get("type", "output"),
+        }
+    )
+    media_bytes = _comfyui_get_bytes(f"/view?{params}")
+    output_path.write_bytes(media_bytes)
 
 
 def _download_comfyui_image(image_info, output_path):
-    params = parse.urlencode(
-        {
-            "filename": image_info.get("filename", ""),
-            "subfolder": image_info.get("subfolder", ""),
-            "type": image_info.get("type", "output"),
-        }
-    )
-    image_bytes = _comfyui_get_bytes(f"/view?{params}")
-    output_path.write_bytes(image_bytes)
+    _download_comfyui_media(image_info, output_path)
+
+
+def _interpolate_video(video_path, interpolated_dir):
+    uploaded_video, prompt_id = _submit_frame_interpolation_to_comfyui(video_path)
+    history = _wait_for_comfyui_prompt(prompt_id)
+    output_video = _find_comfyui_output_video(history)
+    interpolated_video_path = interpolated_dir / video_path.name
+    _download_comfyui_media(output_video, interpolated_video_path)
+
+    if not interpolated_video_path.is_file():
+        raise HTTPException(
+            status_code=500,
+            detail="ComfyUI interpolated video was not saved.",
+        )
+
+    return uploaded_video, prompt_id, output_video, interpolated_video_path
 
 
 def _enhance_frame(frame_path, upscaled_dir, steps=None):
@@ -467,6 +574,7 @@ def generate(request: GenerateRequest):
 def enchance(request: EnchanceRequest):
     video_path = _find_output_file(request.filename.strip())
     upscaled_dir = clear_upscaled_outputs(output_dir=OUTPUT_DIR)
+    interpolated_dir = ensure_interpolated_output_dir(output_dir=OUTPUT_DIR)
 
     try:
         frames_dir, frame_pattern = extract_video_frames(video_path, output_dir=OUTPUT_DIR)
@@ -492,6 +600,13 @@ def enchance(request: EnchanceRequest):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    (
+        uploaded_interpolation_video,
+        interpolation_prompt_id,
+        interpolation_output_video,
+        interpolated_video_path,
+    ) = _interpolate_video(upscaled_video_path, interpolated_dir)
+
     return EnchanceResponse(
         filename=video_path.name,
         steps=configured_steps,
@@ -506,6 +621,24 @@ def enchance(request: EnchanceRequest):
         host_upscaled_video_path=(
             Path("outputs") / "upscaled" / upscaled_video_path.name
         ).as_posix(),
+        interpolated_video_path=interpolated_video_path.resolve().as_posix(),
+        host_interpolated_video_path=(
+            Path("outputs") / "interpolated" / interpolated_video_path.name
+        ).as_posix(),
+        comfyui_interpolation_uploaded_video=uploaded_interpolation_video,
+        comfyui_interpolation_prompt_id=interpolation_prompt_id,
+        comfyui_interpolation_output_filename=interpolation_output_video.get(
+            "filename",
+            "",
+        ),
+        comfyui_interpolation_output_subfolder=interpolation_output_video.get(
+            "subfolder",
+            "",
+        ),
+        comfyui_interpolation_output_type=interpolation_output_video.get(
+            "type",
+            "output",
+        ),
         upscaled_frames=upscaled_frames,
     )
 
