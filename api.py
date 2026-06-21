@@ -62,6 +62,10 @@ class EnchanceRequest(BaseModel):
     steps: Optional[int] = Field(default=None, ge=1)
 
 
+class InterpolateRequest(BaseModel):
+    filename: str = Field(..., min_length=1)
+
+
 class GenerateResponse(BaseModel):
     text: str
     video_path: str
@@ -101,6 +105,20 @@ class EnchanceResponse(BaseModel):
     comfyui_interpolation_output_subfolder: str
     comfyui_interpolation_output_type: str
     upscaled_frames: List[EnchanceFrameResponse]
+
+
+class InterpolateResponse(BaseModel):
+    filename: str
+    video_path: str
+    host_video_path: str
+    interpolated_video_path: str
+    host_interpolated_video_path: str
+    comfyui_url: str
+    comfyui_uploaded_video: str
+    comfyui_prompt_id: str
+    comfyui_output_filename: str
+    comfyui_output_subfolder: str
+    comfyui_output_type: str
 
 
 @app.middleware("http")
@@ -640,6 +658,37 @@ def enchance(request: EnchanceRequest):
             "output",
         ),
         upscaled_frames=upscaled_frames,
+    )
+
+
+@app.post("/interpolate", response_model=InterpolateResponse)
+def interpolate(request: InterpolateRequest):
+    video_path = _find_output_file(request.filename.strip())
+    if video_path.suffix.lower() != ".mp4":
+        raise HTTPException(status_code=400, detail="Filename must point to an .mp4 file.")
+
+    interpolated_dir = ensure_interpolated_output_dir(output_dir=OUTPUT_DIR)
+    (
+        uploaded_video,
+        prompt_id,
+        output_video,
+        interpolated_video_path,
+    ) = _interpolate_video(video_path, interpolated_dir)
+
+    return InterpolateResponse(
+        filename=video_path.name,
+        video_path=video_path.resolve().as_posix(),
+        host_video_path=(Path("outputs") / video_path.name).as_posix(),
+        interpolated_video_path=interpolated_video_path.resolve().as_posix(),
+        host_interpolated_video_path=(
+            Path("outputs") / "interpolated" / interpolated_video_path.name
+        ).as_posix(),
+        comfyui_url=COMFYUI_BASE_URL,
+        comfyui_uploaded_video=uploaded_video,
+        comfyui_prompt_id=prompt_id,
+        comfyui_output_filename=output_video.get("filename", ""),
+        comfyui_output_subfolder=output_video.get("subfolder", ""),
+        comfyui_output_type=output_video.get("type", "output"),
     )
 
 

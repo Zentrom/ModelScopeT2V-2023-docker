@@ -62,3 +62,23 @@ Invoke-RestMethod `
 ```
 
 Frames are written to `./outputs/frames` as `00001.png`, `00002.png`, and so on. Existing image files in `./outputs/upscaled` are deleted, then each extracted frame is sent to ComfyUI on the host at `http://host.docker.internal:8188` using `workflows/image_upgrade.api.json`. Frames are processed one by one; if one fails or times out, the API stops and returns an error. When all frames finish, ffmpeg combines `./outputs/upscaled/*.png` into `./outputs/upscaled/MMDD-hhmm-hash.mp4`, then `workflows/frame_interpolation.api.json` is queued in ComfyUI and the returned video is copied into `./outputs/interpolated` with the same filename.
+
+## Interpolate a video
+
+The input file must be an `.mp4` inside `./outputs`.
+
+```powershell
+Invoke-RestMethod `
+  -Uri "http://127.0.0.1:8080/interpolate" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"filename":"0621-1342-Spiderman_is_surfing.mp4"}'
+```
+
+```bash
+curl -X POST "http://127.0.0.1:8080/interpolate" \
+  -H "Content-Type: application/json" \
+  -d '{"filename":"0621-1342-Spiderman_is_surfing.mp4"}'
+```
+
+The video is sent to ComfyUI on the host using `workflows/frame_interpolation.api.json`. The returned video is saved to `./outputs/interpolated` with the same filename.
