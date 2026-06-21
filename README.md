@@ -50,3 +50,15 @@ curl -X POST "http://127.0.0.1:8080/generate/ms-1.7b" \
 ```
 
 Converted videos are saved into `./outputs`; the original generated files are kept in `./outputs/orig`. File names use `MMDD-hhmm-prompt.mp4`; whitespace in the prompt becomes `_`, and only the first 64 prompt characters are used. Files from the demo model use a `demo_` prefix.
+
+## Extract frames
+
+```powershell
+Invoke-RestMethod `
+  -Uri "http://127.0.0.1:8080/enchance" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"filename":"0621-1342-Spiderman_is_surfing.mp4"}'
+```
+
+Frames are written to `./outputs/frames` as `00001.png`, `00002.png`, and so on.

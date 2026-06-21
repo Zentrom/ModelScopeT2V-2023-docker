@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from load_pipeline import (
     OUTPUT_DIR,
+    extract_video_frames,
     generate_ms_17b_video,
     generate_video,
     load_ms_17b_text_to_video_pipeline,
@@ -35,10 +36,34 @@ class GenerateMs17bRequest(GenerateRequest):
     frames: Optional[int] = Field(default=None, ge=1)
 
 
+class EnchanceRequest(BaseModel):
+    filename: str = Field(..., min_length=1)
+
+
 class GenerateResponse(BaseModel):
     text: str
     video_path: str
     host_path: str
+
+
+class EnchanceResponse(BaseModel):
+    filename: str
+    video_path: str
+    frames_path: str
+    host_frames_path: str
+    frame_pattern: str
+
+
+def _find_output_file(filename):
+    clean_filename = Path(filename).name
+    if not clean_filename:
+        raise HTTPException(status_code=400, detail="Filename cannot be empty.")
+
+    output_path = OUTPUT_DIR / clean_filename
+    if not output_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found in outputs.")
+
+    return output_path
 
 
 def _release_pipeline(pipe):
@@ -138,6 +163,24 @@ def generate(request: GenerateRequest):
         text=text,
         video_path=video_path.resolve().as_posix(),
         host_path=host_path.as_posix(),
+    )
+
+
+@app.post("/enchance", response_model=EnchanceResponse)
+def enchance(request: EnchanceRequest):
+    video_path = _find_output_file(request.filename.strip())
+
+    try:
+        frames_dir, frame_pattern = extract_video_frames(video_path, output_dir=OUTPUT_DIR)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return EnchanceResponse(
+        filename=video_path.name,
+        video_path=video_path.resolve().as_posix(),
+        frames_path=frames_dir.resolve().as_posix(),
+        host_frames_path=(Path("outputs") / "frames").as_posix(),
+        frame_pattern=frame_pattern.resolve().as_posix(),
     )
 
 

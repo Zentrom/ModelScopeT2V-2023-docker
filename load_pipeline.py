@@ -12,6 +12,7 @@ MS_17B_MODEL_REPO = "ali-vilab/text-to-video-ms-1.7b"
 MODEL_DIR = pathlib.Path("weights")
 OUTPUT_DIR = pathlib.Path("outputs")
 ORIG_OUTPUT_SUBDIR = "orig"
+FRAMES_OUTPUT_SUBDIR = "frames"
 DEMO_OUTPUT_PREFIX = "demo_"
 DEFAULT_MS_17B_INFERENCE_STEPS = 25
 DEFAULT_PROMPT = "A robot walking through a futuristic city at night, cinematic lighting"
@@ -52,6 +53,26 @@ def convert_video(input_path, output_path):
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg conversion failed: {result.stderr}")
+
+
+def extract_video_frames(input_path, output_dir=OUTPUT_DIR):
+    frames_dir = pathlib.Path(output_dir) / FRAMES_OUTPUT_SUBDIR
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    frame_pattern = frames_dir / "%05d.png"
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        pathlib.Path(input_path).as_posix(),
+        frame_pattern.as_posix(),
+    ]
+
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg frame extraction failed: {result.stderr}")
+
+    return frames_dir, frame_pattern
 
 
 def delete_file(path):
