@@ -31,4 +31,6 @@ RUN python -m pip install --upgrade pip wheel \
 
 COPY . /workspace
 
+RUN mkdir -p /workspace/outputs/orig
+
 CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8080"]

@@ -31,4 +31,4 @@ curl -X POST "http://127.0.0.1:8080/generate" \
   -d '{"text":"A robot walking through a futuristic city at night, cinematic lighting"}'
 ```
 
-Generated videos are copied into `./outputs`.
+Converted videos are saved into `./outputs`; the original generated files are kept in `./outputs/orig`.
