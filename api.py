@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from time import monotonic, sleep
 from threading import Lock
-from typing import Optional
+from typing import List, Optional
 from urllib import error, parse, request
 from uuid import uuid4
 
@@ -63,16 +63,10 @@ class GenerateResponse(BaseModel):
     host_path: str
 
 
-class EnchanceResponse(BaseModel):
-    filename: str
-    steps: int
-    video_path: str
-    frames_path: str
-    host_frames_path: str
-    first_frame_path: str
-    host_first_frame_path: str
-    frame_pattern: str
-    comfyui_url: str
+class EnchanceFrameResponse(BaseModel):
+    frame: str
+    frame_path: str
+    host_frame_path: str
     comfyui_uploaded_image: str
     comfyui_prompt_id: str
     comfyui_output_filename: str
@@ -80,6 +74,19 @@ class EnchanceResponse(BaseModel):
     comfyui_output_type: str
     upscaled_image_path: str
     host_upscaled_image_path: str
+
+
+class EnchanceResponse(BaseModel):
+    filename: str
+    steps: int
+    video_path: str
+    frames_path: str
+    host_frames_path: str
+    frame_pattern: str
+    comfyui_url: str
+    frame_count: int
+    upscaled_frame_count: int
+    upscaled_frames: List[EnchanceFrameResponse]
 
 
 @app.middleware("http")
@@ -321,6 +328,38 @@ def _download_comfyui_image(image_info, output_path):
     output_path.write_bytes(image_bytes)
 
 
+def _enhance_frame(frame_path, upscaled_dir, steps=None):
+    uploaded_image, prompt_id, configured_steps = _submit_image_upgrade_to_comfyui(
+        frame_path,
+        steps=steps,
+    )
+    history = _wait_for_comfyui_prompt(prompt_id)
+    output_image = _find_comfyui_output_image(history)
+    upscaled_image_path = upscaled_dir / frame_path.name
+    _download_comfyui_image(output_image, upscaled_image_path)
+
+    if not upscaled_image_path.is_file():
+        raise HTTPException(
+            status_code=500,
+            detail=f"ComfyUI output was not saved for frame {frame_path.name}.",
+        )
+
+    return configured_steps, EnchanceFrameResponse(
+        frame=frame_path.name,
+        frame_path=frame_path.resolve().as_posix(),
+        host_frame_path=(Path("outputs") / "frames" / frame_path.name).as_posix(),
+        comfyui_uploaded_image=uploaded_image,
+        comfyui_prompt_id=prompt_id,
+        comfyui_output_filename=output_image.get("filename", ""),
+        comfyui_output_subfolder=output_image.get("subfolder", ""),
+        comfyui_output_type=output_image.get("type", "output"),
+        upscaled_image_path=upscaled_image_path.resolve().as_posix(),
+        host_upscaled_image_path=(
+            Path("outputs") / "upscaled" / upscaled_image_path.name
+        ).as_posix(),
+    )
+
+
 def _release_pipeline(pipe):
     if pipe is None:
         return
@@ -431,18 +470,19 @@ def enchance(request: EnchanceRequest):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    first_frame_path = frames_dir / "00001.png"
-    if not first_frame_path.is_file():
+    frame_paths = sorted(frames_dir.glob("*.png"))
+    if not frame_paths:
         raise HTTPException(status_code=500, detail="No frames were extracted.")
 
-    uploaded_image, prompt_id, configured_steps = _submit_image_upgrade_to_comfyui(
-        first_frame_path,
-        steps=request.steps,
-    )
-    history = _wait_for_comfyui_prompt(prompt_id)
-    output_image = _find_comfyui_output_image(history)
-    upscaled_image_path = upscaled_dir / first_frame_path.name
-    _download_comfyui_image(output_image, upscaled_image_path)
+    configured_steps = None
+    upscaled_frames = []
+    for frame_path in frame_paths:
+        configured_steps, frame_result = _enhance_frame(
+            frame_path,
+            upscaled_dir,
+            steps=request.steps,
+        )
+        upscaled_frames.append(frame_result)
 
     return EnchanceResponse(
         filename=video_path.name,
@@ -450,19 +490,11 @@ def enchance(request: EnchanceRequest):
         video_path=video_path.resolve().as_posix(),
         frames_path=frames_dir.resolve().as_posix(),
         host_frames_path=(Path("outputs") / "frames").as_posix(),
-        first_frame_path=first_frame_path.resolve().as_posix(),
-        host_first_frame_path=(Path("outputs") / "frames" / first_frame_path.name).as_posix(),
         frame_pattern=frame_pattern.resolve().as_posix(),
         comfyui_url=COMFYUI_BASE_URL,
-        comfyui_uploaded_image=uploaded_image,
-        comfyui_prompt_id=prompt_id,
-        comfyui_output_filename=output_image.get("filename", ""),
-        comfyui_output_subfolder=output_image.get("subfolder", ""),
-        comfyui_output_type=output_image.get("type", "output"),
-        upscaled_image_path=upscaled_image_path.resolve().as_posix(),
-        host_upscaled_image_path=(
-            Path("outputs") / "upscaled" / upscaled_image_path.name
-        ).as_posix(),
+        frame_count=len(frame_paths),
+        upscaled_frame_count=len(upscaled_frames),
+        upscaled_frames=upscaled_frames,
     )
 
 

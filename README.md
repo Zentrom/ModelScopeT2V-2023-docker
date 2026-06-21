@@ -61,4 +61,4 @@ Invoke-RestMethod `
   -Body '{"filename":"0621-1342-Spiderman_is_surfing.mp4","steps":1}'
 ```
 
-Frames are written to `./outputs/frames` as `00001.png`, `00002.png`, and so on. Existing files in `./outputs/upscaled` are deleted, then the first extracted frame is uploaded to ComfyUI on the host at `http://host.docker.internal:8188`. The API waits for `workflows/image_upgrade.api.json` to finish and saves the returned image to `./outputs/upscaled/00001.png`.
+Frames are written to `./outputs/frames` as `00001.png`, `00002.png`, and so on. Existing image files in `./outputs/upscaled` are deleted, then each extracted frame is sent to ComfyUI on the host at `http://host.docker.internal:8188` using `workflows/image_upgrade.api.json`. Frames are processed one by one; if one fails or times out, the API stops and returns an error.
