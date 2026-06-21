@@ -61,4 +61,4 @@ Invoke-RestMethod `
   -Body '{"filename":"0621-1342-Spiderman_is_surfing.mp4"}'
 ```
 
-Frames are written to `./outputs/frames` as `00001.png`, `00002.png`, and so on.
+Frames are written to `./outputs/frames` as `00001.png`, `00002.png`, and so on. The first extracted frame is then uploaded to ComfyUI on the host at `http://host.docker.internal:8188`, and `workflows/image_upgrade.api.json` is queued through ComfyUI's `/prompt` API.

@@ -1,7 +1,11 @@
 import gc
+import json
+import os
 from pathlib import Path
 from threading import Lock
 from typing import Optional
+from urllib import error, request
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -20,6 +24,10 @@ app = FastAPI(title="ModelScope Text-to-Video API")
 
 DEMO_MODEL = "demo"
 MS_17B_MODEL = "ms_17b"
+COMFYUI_BASE_URL = os.getenv("COMFYUI_URL", "http://host.docker.internal:8188").rstrip("/")
+COMFYUI_TIMEOUT_SECONDS = 10
+IMAGE_UPGRADE_WORKFLOW_PATH = Path("workflows") / "image_upgrade.api.json"
+IMAGE_UPGRADE_LOAD_IMAGE_NODE_ID = "78"
 
 _demo_pipe = None
 _ms_17b_pipe = None
@@ -51,7 +59,12 @@ class EnchanceResponse(BaseModel):
     video_path: str
     frames_path: str
     host_frames_path: str
+    first_frame_path: str
+    host_first_frame_path: str
     frame_pattern: str
+    comfyui_url: str
+    comfyui_uploaded_image: str
+    comfyui_prompt_id: str
 
 
 def _find_output_file(filename):
@@ -64,6 +77,120 @@ def _find_output_file(filename):
         raise HTTPException(status_code=404, detail="File not found in outputs.")
 
     return output_path
+
+
+def _read_json(path):
+    with path.open("r", encoding="utf-8") as file:
+        return json.load(file)
+
+
+def _comfyui_request(path, data=None, content_type="application/json"):
+    headers = {}
+    body = None
+    if data is not None:
+        body = data if isinstance(data, bytes) else json.dumps(data).encode("utf-8")
+        headers["Content-Type"] = content_type
+
+    url = f"{COMFYUI_BASE_URL}{path}"
+    req = request.Request(url, data=body, headers=headers, method="POST")
+
+    try:
+        with request.urlopen(req, timeout=COMFYUI_TIMEOUT_SECONDS) as response:
+            response_body = response.read().decode("utf-8")
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise HTTPException(
+            status_code=502,
+            detail=f"ComfyUI rejected the request at {COMFYUI_BASE_URL}: {detail}",
+        ) from exc
+    except error.URLError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not connect to ComfyUI at {COMFYUI_BASE_URL}: {exc}",
+        ) from exc
+
+    if not response_body:
+        return {}
+
+    return json.loads(response_body)
+
+
+def _encode_multipart_form_data(fields, files):
+    boundary = f"----modelscope-t2v-{uuid4().hex}"
+    body = bytearray()
+
+    for name, value in fields.items():
+        body.extend(f"--{boundary}\r\n".encode("utf-8"))
+        body.extend(
+            f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8")
+        )
+        body.extend(str(value).encode("utf-8"))
+        body.extend(b"\r\n")
+
+    for name, path in files.items():
+        body.extend(f"--{boundary}\r\n".encode("utf-8"))
+        body.extend(
+            (
+                f'Content-Disposition: form-data; name="{name}"; '
+                f'filename="{path.name}"\r\n'
+            ).encode("utf-8")
+        )
+        body.extend(b"Content-Type: image/png\r\n\r\n")
+        body.extend(path.read_bytes())
+        body.extend(b"\r\n")
+
+    body.extend(f"--{boundary}--\r\n".encode("utf-8"))
+    return bytes(body), f"multipart/form-data; boundary={boundary}"
+
+
+def _upload_image_to_comfyui(image_path):
+    body, content_type = _encode_multipart_form_data(
+        fields={
+            "type": "input",
+            "overwrite": "true",
+        },
+        files={
+            "image": image_path,
+        },
+    )
+    response = _comfyui_request("/upload/image", data=body, content_type=content_type)
+    image_name = response.get("name") or image_path.name
+    subfolder = response.get("subfolder")
+    if subfolder:
+        return f"{subfolder}/{image_name}"
+
+    return image_name
+
+
+def _submit_image_upgrade_to_comfyui(image_path):
+    if not IMAGE_UPGRADE_WORKFLOW_PATH.is_file():
+        raise HTTPException(status_code=500, detail="Image upgrade workflow not found.")
+
+    uploaded_image = _upload_image_to_comfyui(image_path)
+    workflow = _read_json(IMAGE_UPGRADE_WORKFLOW_PATH)
+    try:
+        workflow[IMAGE_UPGRADE_LOAD_IMAGE_NODE_ID]["inputs"]["image"] = uploaded_image
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Image upgrade workflow is missing the LoadImage node.",
+        ) from exc
+
+    response = _comfyui_request(
+        "/prompt",
+        data={
+            "prompt": workflow,
+            "client_id": uuid4().hex,
+        },
+    )
+    prompt_id = response.get("prompt_id")
+    if not prompt_id:
+        raise HTTPException(
+            status_code=500,
+            detail=f"ComfyUI did not return a prompt_id: {response}",
+        )
+
+    return uploaded_image, prompt_id
 
 
 def _release_pipeline(pipe):
@@ -175,12 +302,23 @@ def enchance(request: EnchanceRequest):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    first_frame_path = frames_dir / "00001.png"
+    if not first_frame_path.is_file():
+        raise HTTPException(status_code=500, detail="No frames were extracted.")
+
+    uploaded_image, prompt_id = _submit_image_upgrade_to_comfyui(first_frame_path)
+
     return EnchanceResponse(
         filename=video_path.name,
         video_path=video_path.resolve().as_posix(),
         frames_path=frames_dir.resolve().as_posix(),
         host_frames_path=(Path("outputs") / "frames").as_posix(),
+        first_frame_path=first_frame_path.resolve().as_posix(),
+        host_first_frame_path=(Path("outputs") / "frames" / first_frame_path.name).as_posix(),
         frame_pattern=frame_pattern.resolve().as_posix(),
+        comfyui_url=COMFYUI_BASE_URL,
+        comfyui_uploaded_image=uploaded_image,
+        comfyui_prompt_id=prompt_id,
     )
 
 
