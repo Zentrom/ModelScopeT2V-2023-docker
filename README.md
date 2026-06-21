@@ -58,7 +58,7 @@ Invoke-RestMethod `
   -Uri "http://127.0.0.1:8080/enchance" `
   -Method Post `
   -ContentType "application/json" `
-  -Body '{"filename":"0621-1342-Spiderman_is_surfing.mp4"}'
+  -Body '{"filename":"0621-1342-Spiderman_is_surfing.mp4","steps":1}'
 ```
 
 Frames are written to `./outputs/frames` as `00001.png`, `00002.png`, and so on. Existing files in `./outputs/upscaled` are deleted, then the first extracted frame is uploaded to ComfyUI on the host at `http://host.docker.internal:8188`. The API waits for `workflows/image_upgrade.api.json` to finish and saves the returned image to `./outputs/upscaled/00001.png`.

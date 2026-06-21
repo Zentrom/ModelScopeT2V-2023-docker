@@ -9,6 +9,7 @@ from urllib import error, parse, request
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from load_pipeline import (
@@ -31,12 +32,14 @@ COMFYUI_TIMEOUT_SECONDS = 10
 COMFYUI_POLL_INTERVAL_SECONDS = 5
 COMFYUI_POLL_TIMEOUT_SECONDS = 300
 IMAGE_UPGRADE_WORKFLOW_PATH = Path("workflows") / "image_upgrade.api.json"
+IMAGE_UPGRADE_KSAMPLER_NODE_ID = "3"
 IMAGE_UPGRADE_LOAD_IMAGE_NODE_ID = "78"
 IMAGE_UPGRADE_SAVE_IMAGE_NODE_ID = "60"
 
 _demo_pipe = None
 _ms_17b_pipe = None
 _active_model = None
+_request_lock = Lock()
 _generation_lock = Lock()
 
 
@@ -51,6 +54,7 @@ class GenerateMs17bRequest(GenerateRequest):
 
 class EnchanceRequest(BaseModel):
     filename: str = Field(..., min_length=1)
+    steps: Optional[int] = Field(default=None, ge=1)
 
 
 class GenerateResponse(BaseModel):
@@ -61,6 +65,7 @@ class GenerateResponse(BaseModel):
 
 class EnchanceResponse(BaseModel):
     filename: str
+    steps: int
     video_path: str
     frames_path: str
     host_frames_path: str
@@ -75,6 +80,22 @@ class EnchanceResponse(BaseModel):
     comfyui_output_type: str
     upscaled_image_path: str
     host_upscaled_image_path: str
+
+
+@app.middleware("http")
+async def reject_concurrent_requests(request, call_next):
+    if not _request_lock.acquire(blocking=False):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": "API is already processing another request.",
+            },
+        )
+
+    try:
+        return await call_next(request)
+    finally:
+        _request_lock.release()
 
 
 def _find_output_file(filename):
@@ -197,19 +218,33 @@ def _upload_image_to_comfyui(image_path):
     return image_name
 
 
-def _submit_image_upgrade_to_comfyui(image_path):
+def _configure_image_upgrade_workflow(workflow, uploaded_image, steps=None):
+    try:
+        workflow[IMAGE_UPGRADE_LOAD_IMAGE_NODE_ID]["inputs"]["image"] = uploaded_image
+        ksampler_inputs = workflow[IMAGE_UPGRADE_KSAMPLER_NODE_ID]["inputs"]
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Image upgrade workflow is missing a required node.",
+        ) from exc
+
+    if steps is not None:
+        ksampler_inputs["steps"] = steps
+
+    return ksampler_inputs["steps"]
+
+
+def _submit_image_upgrade_to_comfyui(image_path, steps=None):
     if not IMAGE_UPGRADE_WORKFLOW_PATH.is_file():
         raise HTTPException(status_code=500, detail="Image upgrade workflow not found.")
 
     uploaded_image = _upload_image_to_comfyui(image_path)
     workflow = _read_json(IMAGE_UPGRADE_WORKFLOW_PATH)
-    try:
-        workflow[IMAGE_UPGRADE_LOAD_IMAGE_NODE_ID]["inputs"]["image"] = uploaded_image
-    except KeyError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="Image upgrade workflow is missing the LoadImage node.",
-        ) from exc
+    configured_steps = _configure_image_upgrade_workflow(
+        workflow,
+        uploaded_image,
+        steps=steps,
+    )
 
     response = _comfyui_request(
         "/prompt",
@@ -225,7 +260,7 @@ def _submit_image_upgrade_to_comfyui(image_path):
             detail=f"ComfyUI did not return a prompt_id: {response}",
         )
 
-    return uploaded_image, prompt_id
+    return uploaded_image, prompt_id, configured_steps
 
 
 def _wait_for_comfyui_prompt(prompt_id):
@@ -400,7 +435,10 @@ def enchance(request: EnchanceRequest):
     if not first_frame_path.is_file():
         raise HTTPException(status_code=500, detail="No frames were extracted.")
 
-    uploaded_image, prompt_id = _submit_image_upgrade_to_comfyui(first_frame_path)
+    uploaded_image, prompt_id, configured_steps = _submit_image_upgrade_to_comfyui(
+        first_frame_path,
+        steps=request.steps,
+    )
     history = _wait_for_comfyui_prompt(prompt_id)
     output_image = _find_comfyui_output_image(history)
     upscaled_image_path = upscaled_dir / first_frame_path.name
@@ -408,6 +446,7 @@ def enchance(request: EnchanceRequest):
 
     return EnchanceResponse(
         filename=video_path.name,
+        steps=configured_steps,
         video_path=video_path.resolve().as_posix(),
         frames_path=frames_dir.resolve().as_posix(),
         host_frames_path=(Path("outputs") / "frames").as_posix(),
