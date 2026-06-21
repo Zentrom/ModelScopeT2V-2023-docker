@@ -1,7 +1,7 @@
 import pathlib
+import re
 import shutil
 import subprocess
-import uuid
 from datetime import datetime, timezone
 
 from huggingface_hub import snapshot_download
@@ -61,7 +61,15 @@ def delete_file(path):
         pass
 
 
-def build_output_paths(output_dir, extension=".mp4", filename_prefix=""):
+def format_prompt_for_filename(text):
+    prompt_part = text.strip()[:64]
+    prompt_part = re.sub(r"\s+", "_", prompt_part)
+    prompt_part = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", prompt_part)
+    prompt_part = prompt_part.rstrip(". ")
+    return prompt_part or "prompt"
+
+
+def build_output_paths(output_dir, text, extension=".mp4", filename_prefix=""):
     output_dir = pathlib.Path(output_dir)
     orig_output_dir = output_dir / ORIG_OUTPUT_SUBDIR
 
@@ -69,9 +77,9 @@ def build_output_paths(output_dir, extension=".mp4", filename_prefix=""):
     orig_output_dir.mkdir(parents=True, exist_ok=True)
 
     extension = extension or ".mp4"
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    output_id = uuid.uuid4().hex[:8]
-    file_stem = f"{filename_prefix}{timestamp}-{output_id}"
+    timestamp = datetime.now(timezone.utc).strftime("%m%d-%H%M")
+    prompt_part = format_prompt_for_filename(text)
+    file_stem = f"{filename_prefix}{timestamp}-{prompt_part}"
 
     return (
         orig_output_dir / f"{file_stem}{extension}",
@@ -140,6 +148,7 @@ def generate_video(pipe, text, output_dir=OUTPUT_DIR):
     extension = generated_path.suffix or ".mp4"
     raw_output_path, output_path = build_output_paths(
         output_dir,
+        text,
         extension=extension,
         filename_prefix=DEMO_OUTPUT_PREFIX,
     )
@@ -165,7 +174,7 @@ def generate_ms_17b_video(
 ):
     from diffusers.utils import export_to_video
 
-    raw_output_path, output_path = build_output_paths(output_dir)
+    raw_output_path, output_path = build_output_paths(output_dir, text)
 
     generation_kwargs = {
         "num_inference_steps": (
