@@ -13,6 +13,7 @@ MODEL_DIR = pathlib.Path("weights")
 OUTPUT_DIR = pathlib.Path("outputs")
 ORIG_OUTPUT_SUBDIR = "orig"
 FRAMES_OUTPUT_SUBDIR = "frames"
+UPSCALED_OUTPUT_SUBDIR = "upscaled"
 DEMO_OUTPUT_PREFIX = "demo_"
 DEFAULT_MS_17B_INFERENCE_STEPS = 25
 DEFAULT_PROMPT = "A robot walking through a futuristic city at night, cinematic lighting"
@@ -76,6 +77,16 @@ def extract_video_frames(input_path, output_dir=OUTPUT_DIR):
         raise RuntimeError(f"ffmpeg frame extraction failed: {result.stderr}")
 
     return frames_dir, frame_pattern
+
+
+def clear_upscaled_outputs(output_dir=OUTPUT_DIR):
+    upscaled_dir = pathlib.Path(output_dir) / UPSCALED_OUTPUT_SUBDIR
+    upscaled_dir.mkdir(parents=True, exist_ok=True)
+    for output_path in upscaled_dir.iterdir():
+        if output_path.is_file() and output_path.suffix.lower() in {".png", ".jpg", ".jpeg"}:
+            delete_file(output_path)
+
+    return upscaled_dir
 
 
 def delete_file(path):

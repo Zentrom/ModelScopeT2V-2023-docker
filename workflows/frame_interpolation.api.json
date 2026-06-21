@@ -73,7 +73,7 @@
         "5",
         0
       ],
-      "filename_prefix": "video/ComfyUI",
+      "filename_prefix": "video/interpolatedAPI",
       "format": "auto",
       "codec": "auto"
     },

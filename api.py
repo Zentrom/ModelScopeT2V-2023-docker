@@ -2,9 +2,10 @@ import gc
 import json
 import os
 from pathlib import Path
+from time import monotonic, sleep
 from threading import Lock
 from typing import Optional
-from urllib import error, request
+from urllib import error, parse, request
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
@@ -12,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from load_pipeline import (
     OUTPUT_DIR,
+    clear_upscaled_outputs,
     extract_video_frames,
     generate_ms_17b_video,
     generate_video,
@@ -26,8 +28,11 @@ DEMO_MODEL = "demo"
 MS_17B_MODEL = "ms_17b"
 COMFYUI_BASE_URL = os.getenv("COMFYUI_URL", "http://host.docker.internal:8188").rstrip("/")
 COMFYUI_TIMEOUT_SECONDS = 10
+COMFYUI_POLL_INTERVAL_SECONDS = 5
+COMFYUI_POLL_TIMEOUT_SECONDS = 300
 IMAGE_UPGRADE_WORKFLOW_PATH = Path("workflows") / "image_upgrade.api.json"
 IMAGE_UPGRADE_LOAD_IMAGE_NODE_ID = "78"
+IMAGE_UPGRADE_SAVE_IMAGE_NODE_ID = "60"
 
 _demo_pipe = None
 _ms_17b_pipe = None
@@ -65,6 +70,11 @@ class EnchanceResponse(BaseModel):
     comfyui_url: str
     comfyui_uploaded_image: str
     comfyui_prompt_id: str
+    comfyui_output_filename: str
+    comfyui_output_subfolder: str
+    comfyui_output_type: str
+    upscaled_image_path: str
+    host_upscaled_image_path: str
 
 
 def _find_output_file(filename):
@@ -84,7 +94,7 @@ def _read_json(path):
         return json.load(file)
 
 
-def _comfyui_request(path, data=None, content_type="application/json"):
+def _comfyui_request(path, data=None, content_type="application/json", method=None):
     headers = {}
     body = None
     if data is not None:
@@ -92,7 +102,12 @@ def _comfyui_request(path, data=None, content_type="application/json"):
         headers["Content-Type"] = content_type
 
     url = f"{COMFYUI_BASE_URL}{path}"
-    req = request.Request(url, data=body, headers=headers, method="POST")
+    req = request.Request(
+        url,
+        data=body,
+        headers=headers,
+        method=method or ("POST" if data is not None else "GET"),
+    )
 
     try:
         with request.urlopen(req, timeout=COMFYUI_TIMEOUT_SECONDS) as response:
@@ -113,6 +128,26 @@ def _comfyui_request(path, data=None, content_type="application/json"):
         return {}
 
     return json.loads(response_body)
+
+
+def _comfyui_get_bytes(path):
+    url = f"{COMFYUI_BASE_URL}{path}"
+    req = request.Request(url, method="GET")
+
+    try:
+        with request.urlopen(req, timeout=COMFYUI_TIMEOUT_SECONDS) as response:
+            return response.read()
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise HTTPException(
+            status_code=502,
+            detail=f"ComfyUI rejected the request at {COMFYUI_BASE_URL}: {detail}",
+        ) from exc
+    except error.URLError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not connect to ComfyUI at {COMFYUI_BASE_URL}: {exc}",
+        ) from exc
 
 
 def _encode_multipart_form_data(fields, files):
@@ -191,6 +226,64 @@ def _submit_image_upgrade_to_comfyui(image_path):
         )
 
     return uploaded_image, prompt_id
+
+
+def _wait_for_comfyui_prompt(prompt_id):
+    deadline = monotonic() + COMFYUI_POLL_TIMEOUT_SECONDS
+    history_path = f"/history/{parse.quote(prompt_id)}"
+
+    while monotonic() < deadline:
+        history_response = _comfyui_request(history_path)
+        history = history_response.get(prompt_id)
+        if history:
+            status = history.get("status") or {}
+            status_str = status.get("status_str")
+            completed = status.get("completed")
+            if status_str == "error":
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"ComfyUI prompt failed: {status}",
+                )
+
+            if completed or history.get("outputs"):
+                return history
+
+        sleep(COMFYUI_POLL_INTERVAL_SECONDS)
+
+    raise HTTPException(
+        status_code=504,
+        detail=f"Timed out waiting for ComfyUI prompt {prompt_id}.",
+    )
+
+
+def _find_comfyui_output_image(history):
+    outputs = history.get("outputs") or {}
+    save_output = outputs.get(IMAGE_UPGRADE_SAVE_IMAGE_NODE_ID) or {}
+    images = save_output.get("images") or []
+    if images:
+        return images[0]
+
+    for output in outputs.values():
+        images = output.get("images") or []
+        if images:
+            return images[0]
+
+    raise HTTPException(
+        status_code=500,
+        detail="ComfyUI completed but did not return an output image.",
+    )
+
+
+def _download_comfyui_image(image_info, output_path):
+    params = parse.urlencode(
+        {
+            "filename": image_info.get("filename", ""),
+            "subfolder": image_info.get("subfolder", ""),
+            "type": image_info.get("type", "output"),
+        }
+    )
+    image_bytes = _comfyui_get_bytes(f"/view?{params}")
+    output_path.write_bytes(image_bytes)
 
 
 def _release_pipeline(pipe):
@@ -296,6 +389,7 @@ def generate(request: GenerateRequest):
 @app.post("/enchance", response_model=EnchanceResponse)
 def enchance(request: EnchanceRequest):
     video_path = _find_output_file(request.filename.strip())
+    upscaled_dir = clear_upscaled_outputs(output_dir=OUTPUT_DIR)
 
     try:
         frames_dir, frame_pattern = extract_video_frames(video_path, output_dir=OUTPUT_DIR)
@@ -307,6 +401,10 @@ def enchance(request: EnchanceRequest):
         raise HTTPException(status_code=500, detail="No frames were extracted.")
 
     uploaded_image, prompt_id = _submit_image_upgrade_to_comfyui(first_frame_path)
+    history = _wait_for_comfyui_prompt(prompt_id)
+    output_image = _find_comfyui_output_image(history)
+    upscaled_image_path = upscaled_dir / first_frame_path.name
+    _download_comfyui_image(output_image, upscaled_image_path)
 
     return EnchanceResponse(
         filename=video_path.name,
@@ -319,6 +417,13 @@ def enchance(request: EnchanceRequest):
         comfyui_url=COMFYUI_BASE_URL,
         comfyui_uploaded_image=uploaded_image,
         comfyui_prompt_id=prompt_id,
+        comfyui_output_filename=output_image.get("filename", ""),
+        comfyui_output_subfolder=output_image.get("subfolder", ""),
+        comfyui_output_type=output_image.get("type", "output"),
+        upscaled_image_path=upscaled_image_path.resolve().as_posix(),
+        host_upscaled_image_path=(
+            Path("outputs") / "upscaled" / upscaled_image_path.name
+        ).as_posix(),
     )
 
 

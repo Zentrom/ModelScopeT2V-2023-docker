@@ -81,7 +81,7 @@
         "8",
         0
       ],
-      "filename_prefix": "ComfyUI"
+      "filename_prefix": "image_editAPI"
     },
     "class_type": "SaveImage",
     "_meta": {
