@@ -17,6 +17,8 @@ The API listens on `http://127.0.0.1:8080`.
 
 ## Generate a video
 
+Demo model:
+
 ```powershell
 Invoke-RestMethod `
   -Uri "http://127.0.0.1:8080/generate" `
@@ -31,4 +33,20 @@ curl -X POST "http://127.0.0.1:8080/generate" \
   -d '{"text":"A robot walking through a futuristic city at night, cinematic lighting"}'
 ```
 
-Converted videos are saved into `./outputs`; the original generated files are kept in `./outputs/orig`.
+MS 1.7B model:
+
+```powershell
+Invoke-RestMethod `
+  -Uri "http://127.0.0.1:8080/generate/ms-1.7b" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"text":"Spiderman is surfing","inf_steps":25,"frames":32}'
+```
+
+```bash
+curl -X POST "http://127.0.0.1:8080/generate/ms-1.7b" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Spiderman is surfing","inf_steps":25,"frames":32}'
+```
+
+Converted videos are saved into `./outputs`; the original generated files are kept in `./outputs/orig`. Files from the demo model use a `demo_` prefix.

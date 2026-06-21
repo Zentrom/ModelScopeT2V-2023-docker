@@ -27,6 +27,7 @@ RUN python -m pip install --upgrade pip wheel \
     && python -m pip install open_clip_torch==2.24.0 \
     && python -m pip install pytorch-lightning \
     && python -m pip install huggingface_hub \
+    && python -m pip install diffusers==0.33.1 transformers accelerate imageio imageio-ffmpeg \
     && python -m pip install fastapi==0.95.2 "uvicorn[standard]==0.22.0"
 
 COPY . /workspace
