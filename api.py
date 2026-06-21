@@ -690,7 +690,10 @@ def enchance(request: EnchanceRequest):
     )
 
     try:
-        upscaled_video_path = create_upscaled_video(upscaled_dir)
+        upscaled_video_path = create_upscaled_video(
+            upscaled_dir,
+            output_filename=video_path.name,
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

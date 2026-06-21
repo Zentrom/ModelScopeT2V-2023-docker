@@ -3,7 +3,6 @@ import re
 import shutil
 import subprocess
 from datetime import datetime, timezone
-from uuid import uuid4
 
 from huggingface_hub import snapshot_download
 
@@ -97,11 +96,14 @@ def ensure_interpolated_output_dir(output_dir=OUTPUT_DIR):
     return interpolated_dir
 
 
-def create_upscaled_video(upscaled_dir):
+def create_upscaled_video(upscaled_dir, output_filename):
     upscaled_dir = pathlib.Path(upscaled_dir)
     frame_pattern = upscaled_dir / "%05d.png"
-    timestamp = datetime.now(timezone.utc).strftime("%m%d-%H%M")
-    output_path = upscaled_dir / f"{timestamp}-{uuid4().hex[:8]}.mp4"
+    output_filename = pathlib.Path(output_filename).name
+    if not output_filename:
+        raise RuntimeError("Upscaled video filename cannot be empty.")
+
+    output_path = upscaled_dir / output_filename
 
     command = [
         "ffmpeg",
@@ -157,7 +159,7 @@ def build_output_paths(output_dir, text, extension=".mp4", filename_prefix=""):
     orig_output_dir.mkdir(parents=True, exist_ok=True)
 
     extension = extension or ".mp4"
-    timestamp = datetime.now(timezone.utc).strftime("%m%d-%H%M")
+    timestamp = datetime.now(timezone.utc).strftime("%m%d-%H%M%S")
     prompt_part = format_prompt_for_filename(text)
     file_stem = f"{filename_prefix}{timestamp}-{prompt_part}"
 
